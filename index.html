@@ -1,0 +1,265 @@
+<!doctype html>
+<html lang="nl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0b0d10">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>Hymphrey</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='22' fill='%230b0d10'/%3E%3Cpath d='M20 70 A33 33 0 1 1 80 70' fill='none' stroke='%232A9DFF' stroke-width='12' stroke-linecap='round'/%3E%3C/svg%3E">
+<style>
+  :root {
+    --bg: #0b0d10; --card: #1c1f24; --track: #383c42;
+    --text: #ffffff; --grey: #9aa0a8; --dim: #5a5f66;
+    --blue: #2A9DFF; --green: #36c26b; --yellow: #f2c230; --orange: #ff8a30; --red: #ff4d4d;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  body { padding: max(12px, env(safe-area-inset-top)) 16px max(20px, env(safe-area-inset-bottom)); }
+  main { max-width: 560px; margin: 0 auto; }
+
+  header { display: flex; align-items: center; justify-content: space-between; gap: 12px;
+    background: var(--blue); border-radius: 12px; padding: 10px 14px; margin-bottom: 12px; }
+  header h1 { margin: 0; font-size: 20px; font-weight: 700; }
+  header .room { font-size: 17px; font-weight: 600; white-space: nowrap; }
+
+  .status { display: flex; align-items: center; gap: 8px; font-size: 14px; color: var(--grey);
+    margin: 0 2px 12px; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--dim); flex: none; }
+  .dot.ok { background: var(--green); } .dot.warn { background: var(--orange); } .dot.bad { background: var(--red); }
+
+  .gauges { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .gauge { background: var(--card); border-radius: 12px; padding: 10px 8px 12px; text-align: center;
+    transition: opacity .3s; }
+  .gauge.off { opacity: .45; }
+  .gauge svg { width: 100%; max-width: 170px; display: block; margin: 0 auto -6px; }
+  .gauge .val { font-size: 30px; font-weight: 700; fill: var(--text); }
+  .gauge .unit { font-size: 13px; fill: var(--grey); }
+  .gauge .name { font-size: 17px; font-weight: 600; }
+  .gauge .sub { font-size: 13px; color: var(--grey); margin-top: 2px; min-height: 1.2em; }
+
+  .tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; margin-top: 10px; }
+  .tile { background: var(--card); border-radius: 12px; padding: 10px 12px; }
+  .tile .label { font-size: 13px; color: var(--grey); }
+  .tile .value { font-size: 22px; font-weight: 700; margin-top: 2px; font-variant-numeric: tabular-nums; }
+
+  .alarm { display: none; background: var(--red); color: #fff; border-radius: 12px; padding: 10px 14px;
+    margin-bottom: 12px; font-weight: 600; }
+
+  .setup { background: var(--card); border-radius: 12px; padding: 16px; }
+  .setup p { margin: 0 0 10px; color: var(--grey); }
+  .setup input { width: 100%; font-size: 17px; padding: 10px; border-radius: 8px; border: 1px solid var(--track);
+    background: var(--bg); color: var(--text); }
+  .setup button { margin-top: 10px; width: 100%; font-size: 17px; padding: 10px; border: 0; border-radius: 8px;
+    background: var(--blue); color: #fff; font-weight: 600; }
+  footer { text-align: center; color: var(--dim); font-size: 12px; margin-top: 16px; }
+</style>
+</head>
+<body>
+<main>
+  <header><h1>Hymphrey</h1><span class="room" id="room"></span></header>
+  <div class="status"><span class="dot" id="dot"></span><span id="status">Verbinden…</span></div>
+  <div class="alarm" id="alarm"></div>
+
+  <section id="dash" hidden>
+    <div class="gauges" id="gauges"></div>
+    <div class="tiles" id="tiles"></div>
+  </section>
+
+  <section class="setup" id="setup" hidden>
+    <p>Vul de code van je CYD in (REMOTE_ID in victron_config.h).</p>
+    <input id="code" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="bijv. c1a67cd204e6d6d8">
+    <button id="save">Opslaan</button>
+  </section>
+  <footer id="foot"></footer>
+</main>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/mqtt/5.10.1/mqtt.min.js"></script>
+<script>
+// Instellingen (gelijk aan victron_config.h van de CYD)
+const BROKER = "wss://broker.hivemq.com:8884/mqtt";
+const SOLAR_MAX_W = 250, CHARGER_MAX_A = 15, CURRENT_MAX_A = 30;
+const STALE_S = 60;  // apparaat langer stil (op het moment van versturen) = geen signaal
+
+const STATES = { 0: "uit", 1: "laag vermogen", 2: "storing", 3: "bulk", 4: "absorptie", 5: "druppelladen",
+  6: "opslag", 7: "egaliseren", 9: "omvormen", 11: "voeding", 245: "opstarten", 247: "herstel",
+  252: "ext. besturing" };
+const ALARMS = ["accu-spanning laag", "accu-spanning hoog", "laadtoestand laag", "startaccu laag",
+  "startaccu hoog", "temperatuur laag", "temperatuur hoog", "middenspanning"];
+
+const $ = id => document.getElementById(id);
+let last = null, lastArrived = 0;
+
+// ---------- code (kanaal) uit de link of uit het geheugen van de browser ----------
+function getCode() {
+  const h = location.hash.replace(/^#/, "").trim();
+  if (h) { try { localStorage.setItem("cydCode", h); } catch (e) {} return h; }
+  try { return localStorage.getItem("cydCode") || ""; } catch (e) { return ""; }
+}
+// ---------- verbinding ----------
+function connect(code) {
+  const client = mqtt.connect(BROKER, { clientId: "tel-" + Math.random().toString(16).slice(2, 10),
+    reconnectPeriod: 5000, connectTimeout: 15000 });
+  client.on("connect", () => { client.subscribe("hymphrey/" + code + "/status"); render(); });
+  client.on("reconnect", () => setStatus("bad", "Opnieuw verbinden met de server…"));
+  client.on("offline", () => setStatus("bad", "Geen internet op deze telefoon"));
+  client.on("message", (_t, payload) => {
+    try { last = JSON.parse(payload.toString()); lastArrived = Date.now(); render(); }
+    catch (e) { setStatus("bad", "Onleesbaar bericht ontvangen"); }
+  });
+  setInterval(render, 10000);  // "x min geleden" bijwerken
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) render(); });
+  setTimeout(() => { if (!last && client.connected) setStatus("warn", "Verbonden, nog geen gegevens van de camper"); }, 6000);
+}
+
+function setStatus(cls, text) { $("dot").className = "dot " + cls; $("status").textContent = text; }
+
+function ago(sec) {
+  if (sec < 60) return "zojuist";
+  const m = Math.round(sec / 60);
+  if (m < 60) return m + " min geleden";
+  const h = Math.floor(m / 60);
+  if (h < 48) return h + " uur " + (m % 60 ? (m % 60) + " min " : "") + "geleden";
+  return Math.round(h / 24) + " dagen geleden";
+}
+
+// ---------- tekenen ----------
+const fmt = (v, d) => (v === null || v === undefined || isNaN(v)) ? "--" : Number(v).toFixed(d).replace(".", ",");
+const sgn = (v, d) => (v > 0 ? "+" : "") + fmt(v, d);
+const ok = dev => dev && dev.age >= 0 && dev.age <= STALE_S;
+const noSignal = dev => !dev || dev.age < 0 ? "nog niet gezien" : "geen signaal";
+
+// Boog zoals op de CYD: 240 graden, opening onderaan
+function arcPath(cx, cy, r, a0, a1) {
+  // a in graden: 0 = onderkant, met de klok mee
+  const p = a => [cx - r * Math.sin(a * Math.PI / 180), cy + r * Math.cos(a * Math.PI / 180)];
+  const [x0, y0] = p(a0), [x1, y1] = p(a1);
+  return `M${x0.toFixed(2)} ${y0.toFixed(2)} A${r} ${r} 0 ${a1 - a0 > 180 ? 1 : 0} 1 ${x1.toFixed(2)} ${y1.toFixed(2)}`;
+}
+
+function gaugeHTML({ name, value, min, max, centerZero, text, unit, sub, subColor, off }) {
+  const cx = 60, cy = 58, r = 46, sw = 10;
+  let fill = "";
+  if (value !== null && !isNaN(value)) {
+    const f = (Math.min(max, Math.max(min, value)) - min) / (max - min);
+    const a = 60 + 240 * f;
+    if (centerZero) {
+      if (a > 181) fill = arcPath(cx, cy, r, 180, a);
+      else if (a < 179) fill = arcPath(cx, cy, r, a, 180);
+    } else if (a > 61) fill = arcPath(cx, cy, r, 60, a);
+  }
+  const zero = centerZero ? `<rect x="${cx - 1}" y="${cy - r - sw / 2 - 2}" width="2" height="${sw + 4}" fill="#fff"/>` : "";
+  return `<div class="gauge${off ? " off" : ""}">
+    <svg viewBox="0 0 120 104" role="img" aria-label="${name} ${text} ${unit}">
+      <path d="${arcPath(cx, cy, r, 60, 300)}" stroke="var(--track)" stroke-width="${sw}" fill="none" stroke-linecap="round"/>
+      ${fill ? `<path d="${fill}" stroke="var(--blue)" stroke-width="${sw}" fill="none" stroke-linecap="round"/>` : ""}
+      ${zero}
+      <text x="${cx}" y="${cy + 6}" text-anchor="middle" class="val" ${text === "--" ? 'style="fill:var(--dim)"' : ""}>${text}</text>
+      <text x="${cx}" y="${cy + 24}" text-anchor="middle" class="unit">${unit}</text>
+    </svg>
+    <div class="name">${name}</div>
+    <div class="sub" style="${subColor ? "color:" + subColor : ""}">${sub || ""}</div>
+  </div>`;
+}
+
+function tile(label, value, color) {
+  return `<div class="tile"><div class="label">${label}</div><div class="value"${color ? ` style="color:${color}"` : ""}>${value}</div></div>`;
+}
+
+function socColor(s) { return s >= 50 ? "var(--green)" : s >= 20 ? "var(--yellow)" : "var(--red)"; }
+function ttgText(m) {
+  if (m === undefined || m < 0) return "--";
+  if (m >= 60 * 24 * 10) return "> 10 dagen";
+  return Math.floor(m / 60) + "u" + String(m % 60).padStart(2, "0");
+}
+function stateText(dev) { return STATES[dev.st] ?? ("status " + dev.st); }
+
+function render() {
+  if (!last) return;
+  const d = last;
+  $("dash").hidden = false;
+
+  // Hoe oud is het bericht? (tijd van de CYD, anders aankomst)
+  const sentMs = d.t ? d.t * 1000 : lastArrived;
+  const ageS = Math.max(0, (Date.now() - sentMs) / 1000);
+  const iv = (d.iv || 5) * 60;
+  const when = new Date(sentMs).toLocaleString("nl-NL", { weekday: "short", hour: "2-digit", minute: "2-digit" });
+  if (ageS < iv * 2.5) setStatus("ok", `Bijgewerkt ${ago(ageS)} (${when})`);
+  else setStatus("warn", `Laatste stand ${ago(ageS)} (${when}) – camper niet online?`);
+
+  // Binnentemperatuur in de kop
+  $("room").textContent = d.ruuvi && d.ruuvi.age >= 0 && d.ruuvi.age < 300 && d.ruuvi.t !== null
+    ? `${fmt(d.ruuvi.t, 1)}°C${d.ruuvi.h !== null ? "  " + fmt(d.ruuvi.h, 0) + "%" : ""}` : "";
+
+  const a = d.accu || {}, z = d.zon || {}, l = d.lader || {}, c = d.dcdc || {}, k = d.koel || {};
+  const g = [];
+
+  // Accu (SOC)
+  if (ok(a)) g.push(gaugeHTML({ name: "Accu", value: a.soc, min: 0, max: 100, text: fmt(a.soc, 0), unit: "%",
+    sub: a.ttg >= 0 && a.a < 0 ? "nog " + ttgText(a.ttg) : (a.a > 0.05 ? "laadt" : ""), subColor: "" }));
+  else g.push(gaugeHTML({ name: "Accu", value: null, min: 0, max: 1, text: "--", unit: "%", sub: noSignal(a), subColor: "var(--orange)" }));
+
+  // Stroom (vanuit het midden)
+  if (ok(a)) g.push(gaugeHTML({ name: "Stroom", value: a.a, min: -CURRENT_MAX_A, max: CURRENT_MAX_A, centerZero: true,
+    text: sgn(a.a, 1), unit: "A", sub: a.a < -0.05 ? "ontladen" : a.a > 0.05 ? "laden" : "rust" }));
+  else g.push(gaugeHTML({ name: "Stroom", value: null, min: 0, max: 1, text: "--", unit: "A", sub: noSignal(a), subColor: "var(--orange)" }));
+
+  // Zon
+  const zonAct = ok(z) && (z.st !== 0 || z.w > 0);
+  g.push(gaugeHTML({ name: "Zon", value: ok(z) ? z.w : null, min: 0, max: SOLAR_MAX_W, text: ok(z) ? String(z.w) : "--", unit: "W",
+    sub: ok(z) ? `${stateText(z)} · vandaag ${fmt(z.kwh * 1000, 0)} Wh` : noSignal(z),
+    subColor: ok(z) ? (z.err ? "var(--red)" : "") : "var(--orange)", off: ok(z) && !zonAct }));
+
+  // 230V-lader
+  const laderAct = ok(l) && !l.uit && l.st !== 0;
+  g.push(gaugeHTML({ name: "Walstroom", value: laderAct ? l.a : null, min: 0, max: CHARGER_MAX_A,
+    text: laderAct ? fmt(l.a, 1) : "--", unit: "A",
+    sub: laderAct ? stateText(l) : ok(l) || (l && l.age >= 0) ? "uit" : noSignal(l),
+    subColor: l.err ? "var(--red)" : "", off: !laderAct }));
+
+  // DC-DC (laden tijdens rijden)
+  const dcAct = ok(c) && c.st !== 0;
+  g.push(gaugeHTML({ name: "Rijden", value: dcAct ? c.vout : null, min: 10, max: 15,
+    text: dcAct ? fmt(c.vout, 1) : "--", unit: "V",
+    sub: dcAct ? stateText(c) : ok(c) ? "uit" : noSignal(c), subColor: c.err ? "var(--red)" : "", off: !dcAct }));
+
+  $("gauges").innerHTML = g.join("");
+
+  // Tegels
+  const t = [];
+  t.push(tile("Accuspanning", ok(a) ? fmt(a.v, 2) + " V" : "--"));
+  if (a.start !== undefined) t.push(tile("Startaccu", ok(a) ? fmt(a.start, 2) + " V" : "--",
+    ok(a) ? (a.start < 12.0 ? "var(--red)" : a.start < 12.4 ? "var(--yellow)" : "") : ""));
+  t.push(tile("Verbruikt", ok(a) ? fmt(a.ah, 1) + " Ah" : "--"));
+  if (k.age >= 0 && k.age < 180) {
+    t.push(tile("Koelkast", k.aan ? k.k + " °C" : "uit", k.aan ? "" : "var(--grey)"));
+    if (k.aan) t.push(tile("Vriezer", k.v + " °C"));
+  } else if (k.age !== undefined) {
+    t.push(tile("Koelkast", "--", "var(--dim)"));
+  }
+  if (ok(z)) t.push(tile("Zonnepaneel", fmt(z.v, 1) + " V"));
+  $("tiles").innerHTML = t.join("");
+
+  // Alarm van de SmartShunt
+  const al = ok(a) && a.alarm ? ALARMS.filter((_, i) => a.alarm & (1 << i)) : [];
+  $("alarm").style.display = al.length ? "block" : "none";
+  $("alarm").textContent = al.length ? "Alarm: " + al.join(", ") : "";
+
+  $("foot").textContent = d.up ? `CYD draait ${ago(d.up).replace(" geleden", "")} · stuurt elke ${d.iv} min` : "";
+}
+
+// ---------- starten ----------
+const code = getCode();
+if (!code) {
+  $("setup").hidden = false;
+  $("status").textContent = "Nog geen code ingesteld";
+  $("save").onclick = () => { const c = $("code").value.trim(); if (c) { location.hash = c; location.reload(); } };
+} else {
+  connect(code);
+}
+</script>
+</body>
+</html>
