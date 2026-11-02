@@ -240,7 +240,8 @@ function render() {
   } else if (k.age !== undefined) {
     t.push(tile("Koelkast", "--", "var(--dim)"));
   }
-  if (ok(z)) t.push(tile("Zonnepaneel", fmt(z.v, 1) + " V"));
+  // De MPPT zendt geen paneelspanning (z.v = accuspanning), wel de laadstroom naar de accu
+  if (ok(z)) t.push(tile("Laadstroom zon", fmt(z.a, 1) + " A"));
   $("tiles").innerHTML = t.join("");
 
   // Alarm van de SmartShunt
