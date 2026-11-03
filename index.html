@@ -203,13 +203,13 @@ function render() {
   else g.push(gaugeHTML({ name: "Accu", value: null, min: 0, max: 1, text: "--", unit: "%", sub: noSignal(a), subColor: "var(--orange)" }));
 
   // Stroom (vanuit het midden)
-  if (ok(a)) g.push(gaugeHTML({ name: "Stroom", value: a.a, min: -CURRENT_MAX_A, max: CURRENT_MAX_A, centerZero: true,
+  if (ok(a)) g.push(gaugeHTML({ name: "Verbruik", value: a.a, min: -CURRENT_MAX_A, max: CURRENT_MAX_A, centerZero: true,
     text: sgn(a.a, 1), unit: "A", sub: a.a < -0.05 ? "ontladen" : a.a > 0.05 ? "laden" : "rust" }));
-  else g.push(gaugeHTML({ name: "Stroom", value: null, min: 0, max: 1, text: "--", unit: "A", sub: noSignal(a), subColor: "var(--orange)" }));
+  else g.push(gaugeHTML({ name: "Verbruik", value: null, min: 0, max: 1, text: "--", unit: "A", sub: noSignal(a), subColor: "var(--orange)" }));
 
   // Zon
   const zonAct = ok(z) && (z.st !== 0 || z.w > 0);
-  g.push(gaugeHTML({ name: "Zon", value: ok(z) ? z.w : null, min: 0, max: SOLAR_MAX_W, text: ok(z) ? String(z.w) : "--", unit: "W",
+  g.push(gaugeHTML({ name: "Solar", value: ok(z) ? z.w : null, min: 0, max: SOLAR_MAX_W, text: ok(z) ? String(z.w) : "--", unit: "W",
     sub: ok(z) ? `${stateText(z)} · vandaag ${fmt(z.kwh * 1000, 0)} Wh` : noSignal(z),
     subColor: ok(z) ? (z.err ? "var(--red)" : "") : "var(--orange)", off: ok(z) && !zonAct }));
 
@@ -222,7 +222,7 @@ function render() {
 
   // DC-DC (laden tijdens rijden)
   const dcAct = ok(c) && c.st !== 0;
-  g.push(gaugeHTML({ name: "Rijden", value: dcAct ? c.vout : null, min: 10, max: 15,
+  g.push(gaugeHTML({ name: "DC-DC lader", value: dcAct ? c.vout : null, min: 10, max: 15,
     text: dcAct ? fmt(c.vout, 1) : "--", unit: "V",
     sub: dcAct ? stateText(c) : ok(c) ? "uit" : noSignal(c), subColor: c.err ? "var(--red)" : "", off: !dcAct }));
 
@@ -246,7 +246,7 @@ function render() {
     t.push(tile("Koelkast", "--", "var(--dim)"));
   }
   // De MPPT zendt geen paneelspanning (z.v = accuspanning), wel de laadstroom naar de accu
-  if (ok(z)) t.push(tile("Laadstroom zon", fmt(z.a, 1) + " A"));
+  if (ok(z)) t.push(tile("Laadstroom solar", fmt(z.a, 1) + " A"));
   $("tiles").innerHTML = t.join("");
 
   // Alarm van de SmartShunt
