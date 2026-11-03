@@ -230,6 +230,11 @@ function render() {
 
   // Tegels
   const t = [];
+  // 230V-aansluiting (de wifi-stekker van de lader is alleen bereikbaar als de camper aan de 230V hangt)
+  const st = d.stekker;
+  if (st && st.ac !== undefined)
+    t.push(tile("230V · " + (st.auto ? "Stalling" : "Camping"), st.ac ? "aangesloten" : "niet aangesloten",
+      st.ac ? "var(--yellow)" : "var(--grey)"));
   t.push(tile("Accuspanning", ok(a) ? fmt(a.v, 2) + " V" : "--"));
   if (a.start !== undefined) t.push(tile("Startaccu", ok(a) ? fmt(a.start, 2) + " V" : "--",
     ok(a) ? (a.start < 12.0 ? "var(--red)" : a.start < 12.4 ? "var(--yellow)" : "") : ""));
