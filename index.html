@@ -274,9 +274,14 @@ function render() {
 // ---------- koelkast bedienen ----------
 // De opdracht blijft op de server staan; de CYD haalt hem op bij zijn volgende wifi-ronde (max. ~5 min)
 function renderCtrl(d, k) {
-  const show = d.rc && k.age >= 0 && k.age < 600;
-  $("ctrl").hidden = !show;
-  if (!show) return;
+  $("ctrl").hidden = !d.rc;
+  if (!d.rc) return;
+  if (!(k.age >= 0 && k.age < 600)) {  // CYD ziet de koelkast niet (te ver weg of uit)
+    $("fridgeBtn").textContent = "Koelkast aan/uit";
+    $("fridgeBtn").disabled = true;
+    $("ctrlMsg").textContent = "Koelkast niet bereikbaar: de CYD ziet hem nu niet";
+    return;
+  }
   const pend = store.get("fridgeCmd");  // "id,stand"
   const [pid, pwant] = pend ? pend.split(",") : [];
   const btn = $("fridgeBtn"), msg = $("ctrlMsg");
