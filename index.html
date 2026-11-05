@@ -55,6 +55,11 @@
     background: var(--bg); color: var(--text); }
   .setup button { margin-top: 10px; width: 100%; font-size: 17px; padding: 10px; border: 0; border-radius: 8px;
     background: var(--blue); color: #fff; font-weight: 600; }
+  .ctrl { background: var(--card); border-radius: 12px; padding: 12px; margin-top: 10px; }
+  .ctrl button { width: 100%; font-size: 17px; padding: 12px; border: 0; border-radius: 8px;
+    background: var(--blue); color: #fff; font-weight: 600; }
+  .ctrl button:disabled { background: var(--track); color: var(--grey); }
+  .ctrl .msg { font-size: 14px; color: var(--grey); margin-top: 8px; min-height: 1.2em; }
   footer { text-align: center; color: var(--dim); font-size: 12px; margin-top: 16px; }
 </style>
 </head>
@@ -67,6 +72,10 @@
   <section id="dash" hidden>
     <div class="gauges" id="gauges"></div>
     <div class="tiles" id="tiles"></div>
+    <div class="ctrl" id="ctrl" hidden>
+      <button id="fridgeBtn">Koelkast</button>
+      <div class="msg" id="ctrlMsg"></div>
+    </div>
   </section>
 
   <section class="setup" id="setup" hidden>
@@ -91,7 +100,9 @@ const ALARMS = ["accu-spanning laag", "accu-spanning hoog", "laadtoestand laag",
   "startaccu hoog", "temperatuur laag", "temperatuur hoog", "middenspanning"];
 
 const $ = id => document.getElementById(id);
-let last = null, lastArrived = 0;
+let last = null, lastArrived = 0, client = null, topicBase = "";
+const store = { get: k => { try { return localStorage.getItem(k); } catch (e) { return null; } },
+  set: (k, v) => { try { v === null ? localStorage.removeItem(k) : localStorage.setItem(k, v); } catch (e) {} } };
 
 // ---------- code (kanaal) uit de link of uit het geheugen van de browser ----------
 function getCode() {
@@ -101,7 +112,8 @@ function getCode() {
 }
 // ---------- verbinding ----------
 function connect(code) {
-  const client = mqtt.connect(BROKER, { clientId: "tel-" + Math.random().toString(16).slice(2, 10),
+  topicBase = "hymphrey/" + code;
+  client = mqtt.connect(BROKER, { clientId: "tel-" + Math.random().toString(16).slice(2, 10),
     reconnectPeriod: 5000, connectTimeout: 15000 });
   client.on("connect", () => { client.subscribe("hymphrey/" + code + "/status"); render(); });
   client.on("reconnect", () => setStatus("bad", "Opnieuw verbinden met de server…"));
@@ -233,7 +245,8 @@ function render() {
   // 230V-aansluiting (de wifi-stekker van de lader is alleen bereikbaar als de camper aan de 230V hangt)
   const st = d.stekker;
   if (st && st.ac !== undefined)
-    t.push(tile("230V · " + (st.auto ? "Stalling" : "Camping"), st.ac ? "aangesloten" : "niet aangesloten",
+    t.push(tile("230V · " + (st.mode !== undefined ? ["Stalling", "Camping", "Lader uit"][st.mode] : st.auto ? "Stalling" : "Camping"),
+      st.ac ? "aangesloten" : "niet aangesloten",
       st.ac ? "var(--yellow)" : "var(--grey)"));
   t.push(tile("Accuspanning", ok(a) ? fmt(a.v, 2) + " V" : "--"));
   if (a.start !== undefined) t.push(tile("Startaccu", ok(a) ? fmt(a.start, 2) + " V" : "--",
@@ -248,6 +261,7 @@ function render() {
   // De MPPT zendt geen paneelspanning (z.v = accuspanning), wel de laadstroom naar de accu
   if (ok(z)) t.push(tile("Laadstroom solar", fmt(z.a, 1) + " A"));
   $("tiles").innerHTML = t.join("");
+  renderCtrl(d, k);
 
   // Alarm van de SmartShunt
   const al = ok(a) && a.alarm ? ALARMS.filter((_, i) => a.alarm & (1 << i)) : [];
@@ -256,6 +270,44 @@ function render() {
 
   $("foot").textContent = d.up ? `CYD draait ${ago(d.up).replace(" geleden", "")} · stuurt elke ${d.iv} min` : "";
 }
+
+// ---------- koelkast bedienen ----------
+// De opdracht blijft op de server staan; de CYD haalt hem op bij zijn volgende wifi-ronde (max. ~5 min)
+function renderCtrl(d, k) {
+  const show = d.rc && k.age >= 0 && k.age < 600;
+  $("ctrl").hidden = !show;
+  if (!show) return;
+  const pend = store.get("fridgeCmd");  // "id,stand"
+  const [pid, pwant] = pend ? pend.split(",") : [];
+  const btn = $("fridgeBtn"), msg = $("ctrlMsg");
+  btn.textContent = k.aan ? "Koelkast uitzetten" : "Koelkast aanzetten";
+  btn.disabled = false;
+  if (pid && String(d.rc.id) === pid) {
+    if (d.rc.res === "bezig") { msg.textContent = "De camper schakelt de koelkast nu…"; btn.disabled = true; }
+    else if (d.rc.res === "gelukt") { msg.textContent = "✓ Koelkast is " + (pwant === "1" ? "aan" : "uit") + "gezet"; }
+    else if (d.rc.res === "pincode fout") { msg.textContent = "Pincode fout, probeer opnieuw"; store.set("pin", null); }
+    else msg.textContent = "Schakelen mislukt (koelkast niet bereikbaar?)";
+  } else if (pid) {
+    const min = Math.round((Date.now() - Number(pid)) / 60000);
+    msg.textContent = `Opdracht klaargezet${min > 0 ? " (" + min + " min geleden)" : ""}, de camper haalt hem binnen ${d.iv || 5} min op…`;
+    btn.disabled = true;
+    if (min > 20) { store.set("fridgeCmd", null); msg.textContent = "Geen reactie van de camper"; btn.disabled = false; }
+  } else msg.textContent = "";
+}
+
+$("fridgeBtn").onclick = () => {
+  if (!last || !client || !client.connected) { alert("Geen verbinding met de server"); return; }
+  const want = last.koel && last.koel.aan ? 0 : 1;
+  if (!confirm(`Koelkast ${want ? "AAN" : "UIT"}zetten?`)) return;
+  let pin = store.get("pin");
+  if (!pin) { pin = (prompt("Pincode") || "").trim(); if (!pin) return; store.set("pin", pin); }
+  const id = Date.now();
+  client.publish(topicBase + "/cmd", JSON.stringify({ id, pin, koelkast: want }), { qos: 1, retain: true }, err => {
+    if (err) { $("ctrlMsg").textContent = "Versturen mislukt"; return; }
+    store.set("fridgeCmd", id + "," + want);
+    render();
+  });
+};
 
 // ---------- starten ----------
 const code = getCode();
