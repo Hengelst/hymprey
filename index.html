@@ -76,6 +76,11 @@
       <button id="fridgeBtn">Koelkast</button>
       <div class="msg" id="ctrlMsg"></div>
     </div>
+    <div class="ctrl" id="bctrl" hidden>
+      <div class="tiles"><div class="tile"><div class="label">Boiler</div><div class="value" id="bState">--</div></div></div>
+      <button id="boilerBtn">Boiler</button>
+      <div class="msg" id="boilerMsg"></div>
+    </div>
   </section>
 
   <section class="setup" id="setup" hidden>
@@ -101,6 +106,7 @@ const ALARMS = ["accu-spanning laag", "accu-spanning hoog", "laadtoestand laag",
 
 const $ = id => document.getElementById(id);
 let last = null, lastArrived = 0, client = null, topicBase = "";
+let boiler = null, boilerArrived = 0;  // status van het boilerbordje (eigen wifi, reageert binnen seconden)
 const store = { get: k => { try { return localStorage.getItem(k); } catch (e) { return null; } },
   set: (k, v) => { try { v === null ? localStorage.removeItem(k) : localStorage.setItem(k, v); } catch (e) {} } };
 
@@ -115,14 +121,22 @@ function connect(code) {
   topicBase = "hymphrey/" + code;
   client = mqtt.connect(BROKER, { clientId: "tel-" + Math.random().toString(16).slice(2, 10),
     reconnectPeriod: 5000, connectTimeout: 15000 });
-  client.on("connect", () => { client.subscribe("hymphrey/" + code + "/status"); render(); });
+  client.on("connect", () => {
+    client.subscribe("hymphrey/" + code + "/status");
+    client.subscribe("hymphrey/" + code + "/boiler/status");
+    render(); renderBoiler();
+  });
   client.on("reconnect", () => setStatus("bad", "Opnieuw verbinden met de server…"));
   client.on("offline", () => setStatus("bad", "Geen internet op deze telefoon"));
-  client.on("message", (_t, payload) => {
+  client.on("message", (t, payload) => {
+    if (t.endsWith("/boiler/status")) {
+      try { boiler = JSON.parse(payload.toString()); boilerArrived = Date.now(); renderBoiler(); } catch (e) {}
+      return;
+    }
     try { last = JSON.parse(payload.toString()); lastArrived = Date.now(); render(); }
     catch (e) { setStatus("bad", "Onleesbaar bericht ontvangen"); }
   });
-  setInterval(render, 10000);  // "x min geleden" bijwerken
+  setInterval(() => { render(); renderBoiler(); }, 10000);  // "x min geleden" bijwerken
   document.addEventListener("visibilitychange", () => { if (!document.hidden) render(); });
   setTimeout(() => { if (!last && client.connected) setStatus("warn", "Verbonden, nog geen gegevens van de camper"); }, 6000);
 }
@@ -311,6 +325,60 @@ $("fridgeBtn").onclick = () => {
     if (err) { $("ctrlMsg").textContent = "Versturen mislukt"; return; }
     store.set("fridgeCmd", id + "," + want);
     render();
+  });
+};
+
+// ---------- boiler bedienen ----------
+// Het boilerbordje is zelf altijd online (wifi + MQTT): een opdracht wordt binnen een paar seconden uitgevoerd.
+// Status: {t, sw (aan via de schakelaar op het paneel), rel (op afstand aan = 70 graden), aan, rc:{id,res}}
+function boilerOnline() {
+  if (!boiler) return false;
+  const sent = boiler.t ? boiler.t * 1000 : boilerArrived;
+  return Date.now() - sent < 3 * 60 * 1000;  // stuurt minstens elke minuut
+}
+
+function renderBoiler() {
+  if (!boiler) return;
+  $("dash").hidden = false;
+  $("bctrl").hidden = false;
+  const b = boiler, on = boilerOnline(), btn = $("boilerBtn"), msg = $("boilerMsg"), st = $("bState");
+  if (!on) {
+    st.textContent = "niet bereikbaar"; st.style.color = "var(--dim)";
+    btn.textContent = "Boiler aan/uit"; btn.disabled = true;
+    msg.textContent = "Het boilerbordje is niet online (uitgezet of geen wifi)";
+    return;
+  }
+  const panel = b.sw && !b.rel;
+  st.textContent = b.rel ? "aan, 70°" : panel ? "aan via paneel" : "uit";
+  st.style.color = b.aan ? "var(--orange)" : "var(--grey)";
+  btn.textContent = b.rel ? "Boiler uitzetten" : "Boiler aanzetten (70°)";
+  btn.disabled = panel;
+  const pend = store.get("boilerCmd");  // "id,stand"
+  const [pid, pwant] = pend ? pend.split(",") : [];
+  if (panel) msg.textContent = "Staat aan met de schakelaar op het paneel; uitzetten kan alleen daar";
+  else if (pid && String(b.rc && b.rc.id) === pid) {
+    if (b.rc.res === "gelukt") msg.textContent = "✓ Boiler is " + (pwant === "1" ? "aan" : "uit") + "gezet";
+    else if (b.rc.res === "pincode fout") { msg.textContent = "Pincode fout, probeer opnieuw"; store.set("pin", null); }
+    else msg.textContent = "Schakelen mislukt (" + b.rc.res + ")";
+    store.set("boilerCmd", null);
+  } else if (pid) {
+    if (Date.now() - Number(pid) > 60000) { store.set("boilerCmd", null); msg.textContent = "Geen reactie van de boiler"; }
+    else { msg.textContent = "Versturen…"; btn.disabled = true; }
+  }
+}
+
+$("boilerBtn").onclick = () => {
+  if (!boiler || !client || !client.connected) { alert("Geen verbinding met de server"); return; }
+  const want = boiler.rel ? 0 : 1;
+  if (!confirm(`Boiler ${want ? "AAN (70°)" : "UIT"}zetten?`)) return;
+  let pin = store.get("pin");
+  if (!pin) { pin = (prompt("Pincode") || "").trim(); if (!pin) return; store.set("pin", pin); }
+  const id = Date.now();
+  client.publish(topicBase + "/boiler/cmd", JSON.stringify({ id, pin, boiler: want }), { qos: 1, retain: true }, err => {
+    if (err) { $("boilerMsg").textContent = "Versturen mislukt"; return; }
+    store.set("boilerCmd", id + "," + want);
+    renderBoiler();
+    setTimeout(renderBoiler, 61000);
   });
 };
 
