@@ -399,16 +399,18 @@ function startGps(code) {
     const { latitude: lat, longitude: lon, accuracy: acc } = p.coords;
     if (acc > 200) { $("gps").textContent = "📍 wacht op nauwkeurige positie (± " + Math.round(acc) + " m)"; return; }
     const now = Date.now();
-    if (sent && dist(sent.lat, sent.lon, lat, lon) < 100 && now - sent.t < 15 * 60000) return;
+    // niet opnieuw bij (bijna) dezelfde plek, tenzij 15 min voorbij of duidelijk nauwkeuriger
+    if (sent && dist(sent.lat, sent.lon, lat, lon) < 100 && now - sent.t < 15 * 60000 && acc > sent.acc / 2) return;
+    const prev = sent;
+    sent = { lat, lon, acc, t: now };  // meteen: anders gaan twee snelle posities allebei de deur uit
     const body = lat.toFixed(5) + "," + lon.toFixed(5) + "," + Math.round(acc);
     fetch(url, { method: "POST", body, headers: { "Cache": "yes" } })
       .then(r => {
         if (!r.ok) throw new Error(r.status);
-        sent = { lat, lon, t: now };
         $("gps").textContent = "📍 positie verstuurd naar het keukenscherm (± " + Math.round(acc) + " m, " +
           new Date(now).toLocaleTimeString("nl-NL", { hour: "2-digit", minute: "2-digit" }) + ")";
       })
-      .catch(() => { $("gps").textContent = "📍 positie versturen mislukt, probeert het zo opnieuw"; });
+      .catch(() => { sent = prev; $("gps").textContent = "📍 positie versturen mislukt, probeert het zo opnieuw"; });
   }, e => {
     $("gps").textContent = e.code === 1 ? "📍 locatie niet toegestaan (zet aan in de browser)" : "📍 geen GPS-positie";
   }, { enableHighAccuracy: true, maximumAge: 60000, timeout: 60000 });
