@@ -289,7 +289,7 @@ function render() {
 }
 
 // ---------- gasfles (Mopeka, via de CYD) ----------
-// De CYD stuurt het percentage voor zomer- (z) en winter-LPG (w); tik op de tegel = wisselen (bewaard op deze telefoon).
+// De CYD stuurt het percentage voor zomer- (z) en winter-LPG (w); 2 s vasthouden op de tegel = wisselen (bewaard op deze telefoon).
 const GAS_BATT_LOW_V = 2.5;
 function gasBottleSVG(pct, color) {
   const h = pct > 0 ? Math.max(2, Math.round(19 * pct / 100)) : 0;
@@ -309,15 +309,29 @@ function gasTile(g) {
   const color = fresh ? "var(--green)" : "var(--dim)";
   const label = "Gas · " + (winter ? "winter" : "zomer") + "-LPG" +
     (low ? ' · <span style="color:var(--red)">batterij bijna leeg</span>' : "");
-  return `<div class="tile" id="gasTile" style="cursor:pointer" title="Tik: zomer/winter-LPG">
+  return `<div class="tile" id="gasTile" style="cursor:pointer;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none" title="2 s vasthouden: zomer/winter-LPG">
     <div class="label">${label}</div>
     <div class="value" style="color:${color}">${fresh ? pct + "%" : "--"}${gasBottleSVG(fresh ? pct : 0, color)}</div></div>`;
 }
-$("tiles").addEventListener("click", e => {
+// 2 s vasthouden (niet bewegen) = wisselen; zo gaat het niet per ongeluk
+let gasHold = null, gasHoldXY = null;
+function gasHoldStop() { clearTimeout(gasHold); gasHold = null; }
+$("tiles").addEventListener("pointerdown", e => {
   if (!e.target.closest("#gasTile")) return;
-  store.set("lpgWinter", store.get("lpgWinter") === "1" ? "0" : "1");
-  render();
+  gasHoldStop();
+  gasHoldXY = [e.clientX, e.clientY];
+  gasHold = setTimeout(() => {
+    gasHold = null;
+    store.set("lpgWinter", store.get("lpgWinter") === "1" ? "0" : "1");
+    if (navigator.vibrate) navigator.vibrate(60);
+    render();
+  }, 2000);
 });
+$("tiles").addEventListener("pointermove", e => {
+  if (gasHold && Math.hypot(e.clientX - gasHoldXY[0], e.clientY - gasHoldXY[1]) > 15) gasHoldStop();  // scrollen
+});
+for (const ev of ["pointerup", "pointercancel", "pointerleave"]) $("tiles").addEventListener(ev, gasHoldStop);
+$("tiles").addEventListener("contextmenu", e => { if (e.target.closest("#gasTile")) e.preventDefault(); });
 
 // ---------- koelkast bedienen ----------
 // De opdracht blijft op de server staan; de CYD haalt hem op bij zijn volgende wifi-ronde (max. ~5 min)
